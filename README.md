@@ -1,10 +1,10 @@
-#==============================================================================
-# Sig-Net Protocol Framework - Wireshark Lua Dissector
-#==============================================================================
+##==============================================================================
+## Sig-Net Protocol Framework - Wireshark Lua Dissector
+##==============================================================================
 
-# Copyright (c) 2026 Singularity (UK) Ltd.
+## Copyright (c) 2026 Singularity (UK) Ltd.
 
-# Sig-Net Wireshark Lua Dissector
+## Sig-Net Wireshark Lua Dissector
 
 This repository contains a Wireshark Lua post-dissector for Sig-Net. 
 
