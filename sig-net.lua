@@ -29,7 +29,7 @@
 -- Description:  Wireshark post-dissector for Sig-Net carried over CoAP.
 --               Reparses URI-Path and Sig-Net custom options in the private
 --               use range (2048-64999), decodes TLV payloads, and forwards
---               embedded RDM TLVs to Wireshark's built-in RDM dissector.
+--               embedded RDM TLVs to Wireshark's built-in RDM dissector. 
 --==============================================================================
 
 local sig_net = Proto("SigNet", "Sig-Net")

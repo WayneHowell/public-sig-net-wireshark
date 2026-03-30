@@ -6,7 +6,7 @@
 
 # Sig-Net Wireshark Lua Dissector
 
-This repository contains a Wireshark Lua post-dissector for Sig-Net.
+This repository contains a Wireshark Lua post-dissector for Sig-Net. 
 
 ## Files
 
