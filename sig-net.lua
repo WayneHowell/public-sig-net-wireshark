@@ -535,7 +535,7 @@ local function decode_uid_array(value_range, tlv_tree, label)
     end
 end
 
-local function call_rdm_dissector(value_range, pinfo, tlv_tree)
+local function call_rdm_dissector(value_range, pinfo, tlv_tree, strip_start_code)
     local dissector = get_rdm_dissector()
     if not dissector then
         add_text(tlv_tree, "Embedded RDM dissector not found. Raw RDM bytes shown only.")
@@ -544,8 +544,14 @@ local function call_rdm_dissector(value_range, pinfo, tlv_tree)
 
     add_text(tlv_tree, "Embedded RDM dissector: " .. rdm_dissector_name)
 
+    local range_for_dissector = value_range
+    if strip_start_code and value_range:len() >= 2 and value_range(0, 1):uint() == 0xCC then
+        range_for_dissector = value_range(1, value_range:len() - 1)
+        add_text(tlv_tree, "Embedded RDM decode: stripped leading Start Code 0xCC for dissector alignment")
+    end
+
     local ok = pcall(function()
-        dissector:call(value_range:tvb(), pinfo, tlv_tree)
+        dissector:call(range_for_dissector:tvb(), pinfo, tlv_tree)
     end)
 
     if ok then
@@ -553,7 +559,7 @@ local function call_rdm_dissector(value_range, pinfo, tlv_tree)
     end
 
     local second_ok = pcall(function()
-        local byte_array = ByteArray.new(range_hex(value_range))
+        local byte_array = ByteArray.new(range_hex(range_for_dissector))
         dissector:call(byte_array:tvb("Sig-Net Embedded RDM"), pinfo, tlv_tree)
     end)
 
@@ -700,11 +706,11 @@ local tlv_decoders = {
     [0x0202] = decode_timecode,
     [0x0301] = function(value_range, tlv_tree, ctx)
         add_text(tlv_tree, string.format("RDM Command Length: %u", value_range:len()))
-        call_rdm_dissector(value_range, ctx.pinfo, tlv_tree)
+        call_rdm_dissector(value_range, ctx.pinfo, tlv_tree, true)
     end,
     [0x0302] = function(value_range, tlv_tree, ctx)
         add_text(tlv_tree, string.format("RDM Response Length: %u", value_range:len()))
-        call_rdm_dissector(value_range, ctx.pinfo, tlv_tree)
+        call_rdm_dissector(value_range, ctx.pinfo, tlv_tree, true)
     end,
     [0x0303] = function(value_range, tlv_tree)
         if value_range:len() ~= 1 then
@@ -1009,7 +1015,7 @@ local function decode_tlvs(payload_range, sig_tree, ctx)
         end
 
         local full_range = payload_range(offset, total)
-        local value_range = payload_range(offset + 4, length)
+        local value_range = (length > 0) and payload_range(offset + 4, length) or tid_range(0, 0)
         local name = tid_names[tid] or ((tid >= 0x8000) and "Manufacturer-Specific TID" or "Unknown TID")
         local tlv_tree = tlv_root:add(sig_net, full_range, string.format("%u: %s (0x%04X), Length %u", index, name, tid, length))
         tlv_tree:add(fields.tid, tid_range)

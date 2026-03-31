@@ -34,7 +34,12 @@ Then restart Wireshark. (Not sure if this is required)
 
 ## Run
 
-Type "signet" (no hyphen) in the display filter.
+Use `signet` (no hyphen) in the display filter.
+
+- Display filter name: `signet`
+- Sig-Net URI path value: `sig-net`
+
+These are different on purpose. The display filter is derived from the Lua protocol registration name, while the URI path is the on-wire protocol path.
 
 ## Versioning
 
@@ -42,6 +47,10 @@ Type "signet" (no hyphen) in the display filter.
 - Protocol version is tracked separately as Sig-Net v0.12.
 
 ## Version History
+
+- 1.0.1 (2026-03-31)
+	- Blind fix of reported +1 offset on RDM payload.
+	- Fix for zero length TID_LEVEL.
 
 - 1.0.0 (2026-03-30)
 	- Initial public Wireshark Lua post-dissector release.
@@ -51,6 +60,7 @@ Type "signet" (no hyphen) in the display filter.
 ## Notes
 
 - This is implemented as a post-dissector so the normal CoAP dissection remains visible.
+- Wireshark may show yellow CoAP expert warnings such as `Unknown Option Number 2076` for Sig-Net private CoAP options (2076, 2108, 2140, 2172, 2204, 2236). This is expected in Lua post-dissector mode and does not mean Sig-Net decoding failed.
 - The plugin is defensive about malformed CoAP options and malformed TLV lengths.
 - Validated to load in the local Wireshark 4.6 installation via TShark.
 - This should handoff TID_RDM to the 'rdm`, dissector - not yet tested.
