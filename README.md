@@ -44,13 +44,22 @@ These are different on purpose. The display filter is derived from the Lua proto
 ## Versioning
 
 - Plugin versioning uses semantic versioning (MAJOR.MINOR.PATCH).
-- Protocol version is tracked separately as Sig-Net v0.12.
+- Protocol version is tracked separately as Sig-Net v0.15.
 
 ## Version History
 
+- 1.1.0 (2026-04-06)
+	- Updated dissector target to Sig-Net v0.15.
+	- Added TID decode coverage for `TID_RDM_FLOW_CONTROL` (0x0306).
+	- Added TID decode coverage for `TID_RT_REBOOT` (0x060A) and `TID_RT_MODEL_NAME` (0x060B).
+	- Added TID decode coverage for `TID_EP_FAILOVER` (0x0908), `TID_EP_DMX_TIMING` (0x0909), and `TID_EP_REFRESH_CAPABILITY` (0x090A).
+	- Updated `TID_RT_IDENTIFY` decode options to v0.15 states: Off, Identify Subtle, Identify Full, and Mute indicators/backlights.
+	- Updated `TID_EP_CAPABILITY` (0x0904) decode and renamed display from legacy `TID_EP_DIRECTION_CAPABILITY`.
+	- Renamed displayed `TID_RT_MULT` (0x0606) to `TID_RT_MULT_OVERRIDE` for v0.15 naming alignment.
+
 - 1.0.1 (2026-03-31)
 	- Blind fix of reported +1 offset on RDM payload.
-	- Fix for zero length TID_LEVEL.
+	- Fix for zero length `TID_RDM_TOD_DATA`.
 
 - 1.0.0 (2026-03-30)
 	- Initial public Wireshark Lua post-dissector release.

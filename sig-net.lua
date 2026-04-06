@@ -24,8 +24,8 @@
 --
 --==============================================================================
 -- Author:       Wayne Howell
--- Date:         March 28, 2026
--- Prot Version: v0.12
+-- Date:         April 6, 2026
+-- Prot Version: v0.15
 -- Description:  Wireshark post-dissector for Sig-Net carried over CoAP.
 --               Reparses URI-Path and Sig-Net custom options in the private
 --               use range (2048-64999), decodes TLV payloads, and forwards
@@ -36,7 +36,7 @@ local sig_net = Proto("SigNet", "Sig-Net")
 
 if set_plugin_info then
     set_plugin_info({
-        version = "1.0.0",
+        version = "1.1.0",
         author = "Wayne Howell",
         description = "Sig-Net Wireshark Lua post-dissector",
         repository = "private-sig-net-wireshark"
@@ -113,7 +113,14 @@ local rt_mult_vals = {
 
 local identify_vals = {
     [0x00] = "Off",
-    [0x01] = "On"
+    [0x01] = "Identify Subtle",
+    [0x02] = "Identify Full",
+    [0x03] = "Mute indicators/backlights"
+}
+
+local reboot_type_vals = {
+    [0xFF] = "Hardware Reset",
+    [0xFE] = "Warm Reboot"
 }
 
 local ep_direction_vals = {
@@ -133,6 +140,24 @@ local security_event_vals = {
     [0x0002] = "Replay Attack Detected",
     [0x0003] = "DoS Rate-Limiting Activated",
     [0x0004] = "Unauthorised Provisioning Attempt"
+}
+
+local ep_failover_mode_vals = {
+    [0x00] = "Hold Last State",
+    [0x01] = "Blackout",
+    [0x02] = "Full",
+    [0x03] = "Play Scene"
+}
+
+local dmx_tx_mode_vals = {
+    [0x00] = "Continuous",
+    [0x01] = "Delta / Change-Only"
+}
+
+local dmx_timing_vals = {
+    [0x00] = "Maximum timing",
+    [0x01] = "Medium timing",
+    [0x02] = "Minimum timing"
 }
 
 local sig_net_option_names = {
@@ -156,6 +181,7 @@ local tid_names = {
     [0x0303] = "TID_RDM_TOD_CONTROL",
     [0x0304] = "TID_RDM_TOD_DATA",
     [0x0305] = "TID_RDM_TOD_BACKGROUND",
+    [0x0306] = "TID_RDM_FLOW_CONTROL",
     [0x0401] = "TID_RT_UNPROVISION",
     [0x0501] = "TID_NW_MAC_ADDRESS",
     [0x0502] = "TID_NW_IPV4_MODE",
@@ -173,17 +199,22 @@ local tid_names = {
     [0x0603] = "TID_RT_PROTOCOL_VERSION",
     [0x0604] = "TID_RT_FIRMWARE_VERSION",
     [0x0605] = "TID_RT_DEVICE_LABEL",
-    [0x0606] = "TID_RT_MULT",
+    [0x0606] = "TID_RT_MULT_OVERRIDE",
     [0x0607] = "TID_RT_IDENTIFY",
     [0x0608] = "TID_RT_STATUS",
     [0x0609] = "TID_RT_ROLE_CAPABILITY",
+    [0x060A] = "TID_RT_REBOOT",
+    [0x060B] = "TID_RT_MODEL_NAME",
     [0x0901] = "TID_EP_UNIVERSE",
     [0x0902] = "TID_EP_LABEL",
     [0x0903] = "TID_EP_MULT_OVERRIDE",
-    [0x0904] = "TID_EP_DIRECTION_CAPABILITY",
+    [0x0904] = "TID_EP_CAPABILITY",
     [0x0905] = "TID_EP_DIRECTION",
     [0x0906] = "TID_EP_INPUT_PRIORITY",
     [0x0907] = "TID_EP_STATUS",
+    [0x0908] = "TID_EP_FAILOVER",
+    [0x0909] = "TID_EP_DMX_TIMING",
+    [0x090A] = "TID_EP_REFRESH_CAPABILITY",
     [0xFF01] = "TID_DG_SECURITY_EVENT",
     [0xFF02] = "TID_DG_MESSAGE",
     [0xFF03] = "TID_DG_LEVEL_FOLDBACK"
@@ -632,18 +663,20 @@ local function decode_role_capability(value_range, tlv_tree)
     add_bool_line(tlv_tree, "Manager Role Supported", bit_state(value, 0x04))
 end
 
-local function decode_endpoint_direction_capability(value_range, tlv_tree)
+local function decode_endpoint_capability(value_range, tlv_tree)
     if value_range:len() ~= 1 then
-        add_text(tlv_tree, string.format("Unexpected direction capability length: %u", value_range:len()))
+        add_text(tlv_tree, string.format("Unexpected endpoint capability length: %u", value_range:len()))
         return
     end
 
     local value = value_range(0, 1):uint()
-    add_text(tlv_tree, string.format("Direction Capability Bitfield: 0x%02X", value))
+    add_text(tlv_tree, string.format("Endpoint Capability Bitfield: 0x%02X", value))
     add_bool_line(tlv_tree, "Can Consume TID_LEVEL", bit_state(value, 0x01))
     add_bool_line(tlv_tree, "Can Supply TID_LEVEL", bit_state(value, 0x02))
     add_bool_line(tlv_tree, "Can Consume RDM", bit_state(value, 0x04))
     add_bool_line(tlv_tree, "Can Supply RDM", bit_state(value, 0x08))
+    add_bool_line(tlv_tree, "Virtual Endpoint", bit_state(value, 0x10))
+    add_text(tlv_tree, string.format("Reserved bits (5-7): 0x%02X", band(value, 0xE0)))
 end
 
 local function decode_endpoint_status(value_range, tlv_tree)
@@ -732,6 +765,18 @@ local tlv_decoders = {
             return
         end
         add_text(tlv_tree, "Background TOD: " .. enum_text(value_range(0, 1):uint(), rdm_tod_background_vals))
+    end,
+    [0x0306] = function(value_range, tlv_tree)
+        if value_range:len() == 0 then
+            add_text(tlv_tree, "Queryable GET form with zero-length payload")
+            return
+        end
+        if value_range:len() ~= 2 then
+            add_text(tlv_tree, string.format("Unexpected RDM flow control length: %u", value_range:len()))
+            return
+        end
+        add_text(tlv_tree, string.format("Total RDM FIFO Buffers: %u", value_range(0, 1):uint()))
+        add_text(tlv_tree, string.format("Available RDM FIFO Buffers: %u", value_range(1, 1):uint()))
     end,
     [0x0401] = function(value_range, tlv_tree)
         if value_range:len() ~= 4 then
@@ -878,7 +923,7 @@ local tlv_decoders = {
             return
         end
         if value_range:len() ~= 1 then
-            add_text(tlv_tree, string.format("Unexpected RT_MULT length: %u", value_range:len()))
+            add_text(tlv_tree, string.format("Unexpected RT_MULT_OVERRIDE length: %u", value_range:len()))
             return
         end
         add_text(tlv_tree, "Routing State: " .. enum_text(value_range(0, 1):uint(), rt_mult_vals))
@@ -907,6 +952,33 @@ local tlv_decoders = {
             return
         end
         decode_role_capability(value_range, tlv_tree)
+    end,
+    [0x060A] = function(value_range, tlv_tree)
+        if value_range:len() ~= 5 then
+            add_text(tlv_tree, string.format("Unexpected RT_REBOOT length: %u", value_range:len()))
+            return
+        end
+
+        local reboot_type = value_range(0, 1):uint()
+        local magic = range_string(value_range(1, 4))
+        add_text(tlv_tree, "Reboot Type: " .. enum_text(reboot_type, reboot_type_vals))
+        add_text(tlv_tree, "Magic Word: " .. magic)
+        if magic ~= "BOOT" then
+            add_text(tlv_tree, "Warning: Magic word is not BOOT")
+        end
+    end,
+    [0x060B] = function(value_range, tlv_tree)
+        if value_range:len() == 0 then
+            add_text(tlv_tree, "Queryable GET form with zero-length payload")
+            return
+        end
+        if value_range:len() < 5 or value_range:len() > 68 then
+            add_text(tlv_tree, string.format("Unexpected model name length: %u", value_range:len()))
+            return
+        end
+
+        add_text(tlv_tree, string.format("SoemCode: 0x%08X", value_range(0, 4):uint()))
+        add_text(tlv_tree, "Model Name: " .. range_string(value_range(4, value_range:len() - 4)))
     end,
     [0x0901] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
@@ -938,7 +1010,7 @@ local tlv_decoders = {
             add_text(tlv_tree, "Queryable GET form with zero-length payload")
             return
         end
-        decode_endpoint_direction_capability(value_range, tlv_tree)
+        decode_endpoint_capability(value_range, tlv_tree)
     end,
     [0x0905] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
@@ -965,6 +1037,50 @@ local tlv_decoders = {
             return
         end
         decode_endpoint_status(value_range, tlv_tree)
+    end,
+    [0x0908] = function(value_range, tlv_tree)
+        if value_range:len() == 0 then
+            add_text(tlv_tree, "Queryable GET form with zero-length payload")
+            return
+        end
+        if value_range:len() ~= 3 then
+            add_text(tlv_tree, string.format("Unexpected failover length: %u", value_range:len()))
+            return
+        end
+
+        local mode = value_range(0, 1):uint()
+        local scene = value_range(1, 2):uint()
+        add_text(tlv_tree, "Failover Mode: " .. enum_text(mode, ep_failover_mode_vals))
+        add_text(tlv_tree, string.format("Scene Number: %u", scene))
+    end,
+    [0x0909] = function(value_range, tlv_tree)
+        if value_range:len() == 0 then
+            add_text(tlv_tree, "Queryable GET form with zero-length payload")
+            return
+        end
+        if value_range:len() ~= 2 then
+            add_text(tlv_tree, string.format("Unexpected DMX timing length: %u", value_range:len()))
+            return
+        end
+
+        add_text(tlv_tree, "Transmission Mode: " .. enum_text(value_range(0, 1):uint(), dmx_tx_mode_vals))
+        add_text(tlv_tree, "Output Timing: " .. enum_text(value_range(1, 1):uint(), dmx_timing_vals))
+    end,
+    [0x090A] = function(value_range, tlv_tree)
+        if value_range:len() == 0 then
+            add_text(tlv_tree, "Queryable GET form with zero-length payload")
+            return
+        end
+        if value_range:len() ~= 1 then
+            add_text(tlv_tree, string.format("Unexpected refresh capability length: %u", value_range:len()))
+            return
+        end
+
+        local fps = value_range(0, 1):uint()
+        add_text(tlv_tree, string.format("Max Refresh Capability: %u fps", fps))
+        if fps >= 251 then
+            add_text(tlv_tree, "Warning: Value is in reserved range (251-255)")
+        end
     end,
     [0xFF01] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
