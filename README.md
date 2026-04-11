@@ -44,9 +44,20 @@ These are different on purpose. The display filter is derived from the Lua proto
 ## Versioning
 
 - Plugin versioning uses semantic versioning (MAJOR.MINOR.PATCH).
-- Protocol version is tracked separately as Sig-Net v0.15.
+- Protocol version is tracked separately as Sig-Net v0.16.
 
 ## Version History
+
+- 1.2.0 (2026-04-11)
+	- Updated dissector target to Sig-Net v0.16.
+	- Updated URI parsing for scoped routing format: `/sig-net/<version>/<scope>/...`.
+	- Added Sig-Net URI Scope field output in the decode tree.
+	- Added support for `TID_RT_SCOPE` (0x060C).
+	- Updated `TID_RDM_TOD_DATA` (0x0304) decode to v0.16 format with `Packet_Index`, `Total_Packets`, and UID array payload.
+	- Updated `TID_RT_MODEL_NAME` (0x060B) decode for v0.16 payload format (model string only).
+	- Updated `TID_EP_DIRECTION` (0x0905) enum handling to include Fallback mode and explicit RDM enable bit decoding.
+	- Updated `TID_EP_FAILOVER` (0x0908) enum handling to include "Stop generating DMX" mode (0x04).
+	- Plugin version bumped to `1.2.0`.
 
 - 1.1.0 (2026-04-06)
 	- Updated dissector target to Sig-Net v0.15.

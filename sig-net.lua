@@ -24,8 +24,8 @@
 --
 --==============================================================================
 -- Author:       Wayne Howell
--- Date:         April 6, 2026
--- Prot Version: v0.15
+-- Date:         April 11, 2026
+-- Prot Version: v0.16
 -- Description:  Wireshark post-dissector for Sig-Net carried over CoAP.
 --               Reparses URI-Path and Sig-Net custom options in the private
 --               use range (2048-64999), decodes TLV payloads, and forwards
@@ -36,7 +36,7 @@ local sig_net = Proto("SigNet", "Sig-Net")
 
 if set_plugin_info then
     set_plugin_info({
-        version = "1.1.0",
+        version = "1.2.0",
         author = "Wayne Howell",
         description = "Sig-Net Wireshark Lua post-dissector",
         repository = "private-sig-net-wireshark"
@@ -126,7 +126,8 @@ local reboot_type_vals = {
 local ep_direction_vals = {
     [0x00] = "Disabled",
     [0x01] = "Consumer",
-    [0x02] = "Supplier"
+    [0x02] = "Supplier",
+    [0x03] = "Fallback"
 }
 
 local address_type_vals = {
@@ -146,7 +147,8 @@ local ep_failover_mode_vals = {
     [0x00] = "Hold Last State",
     [0x01] = "Blackout",
     [0x02] = "Full",
-    [0x03] = "Play Scene"
+    [0x03] = "Play Scene",
+    [0x04] = "Stop generating DMX"
 }
 
 local dmx_tx_mode_vals = {
@@ -205,6 +207,7 @@ local tid_names = {
     [0x0609] = "TID_RT_ROLE_CAPABILITY",
     [0x060A] = "TID_RT_REBOOT",
     [0x060B] = "TID_RT_MODEL_NAME",
+    [0x060C] = "TID_RT_SCOPE",
     [0x0901] = "TID_EP_UNIVERSE",
     [0x0902] = "TID_EP_LABEL",
     [0x0903] = "TID_EP_MULT_OVERRIDE",
@@ -228,6 +231,7 @@ local fields = {
     coap_message_id = ProtoField.uint16("SigNet.coap.message_id", "CoAP Message ID", base.HEX),
     uri = ProtoField.string("SigNet.uri", "Sig-Net URI"),
     uri_version = ProtoField.string("SigNet.uri.version", "Sig-Net Version"),
+    uri_scope = ProtoField.string("SigNet.uri.scope", "Sig-Net Scope"),
     uri_resource = ProtoField.string("SigNet.uri.resource", "Sig-Net Resource"),
     security_mode = ProtoField.uint8("SigNet.security_mode", "Security Mode", base.HEX, security_mode_vals),
     sender_id = ProtoField.bytes("SigNet.sender_id", "Sender ID"),
@@ -566,6 +570,33 @@ local function decode_uid_array(value_range, tlv_tree, label)
     end
 end
 
+local function decode_rdm_tod_data(value_range, tlv_tree)
+    if value_range:len() == 0 then
+        add_text(tlv_tree, "Queryable GET form with zero-length payload")
+        return
+    end
+
+    if value_range:len() < 2 then
+        add_text(tlv_tree, string.format("Unexpected TOD data length: %u", value_range:len()))
+        return
+    end
+
+    local packet_index = value_range(0, 1):uint()
+    local total_packets = value_range(1, 1):uint()
+    local uid_payload_len = value_range:len() - 2
+
+    add_text(tlv_tree, string.format("TOD Packet Index: %u", packet_index))
+    add_text(tlv_tree, string.format("TOD Total Packets: %u", total_packets))
+
+    if uid_payload_len == 0 then
+        add_text(tlv_tree, "RDM UID: empty")
+        return
+    end
+
+    local uid_range = value_range(2, uid_payload_len)
+    decode_uid_array(uid_range, tlv_tree, "RDM UID")
+end
+
 local function call_rdm_dissector(value_range, pinfo, tlv_tree, strip_start_code)
     local dissector = get_rdm_dissector()
     if not dissector then
@@ -752,9 +783,7 @@ local tlv_decoders = {
         end
         add_text(tlv_tree, "TOD Control: " .. enum_text(value_range(0, 1):uint(), rdm_tod_control_vals))
     end,
-    [0x0304] = function(value_range, tlv_tree)
-        decode_uid_array(value_range, tlv_tree, "RDM UID")
-    end,
+    [0x0304] = decode_rdm_tod_data,
     [0x0305] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
             add_text(tlv_tree, "Queryable GET form with zero-length payload")
@@ -972,13 +1001,24 @@ local tlv_decoders = {
             add_text(tlv_tree, "Queryable GET form with zero-length payload")
             return
         end
-        if value_range:len() < 5 or value_range:len() > 68 then
+        if value_range:len() < 1 or value_range:len() > 64 then
             add_text(tlv_tree, string.format("Unexpected model name length: %u", value_range:len()))
             return
         end
 
-        add_text(tlv_tree, string.format("SoemCode: 0x%08X", value_range(0, 4):uint()))
-        add_text(tlv_tree, "Model Name: " .. range_string(value_range(4, value_range:len() - 4)))
+        add_text(tlv_tree, "Model Name: " .. range_string(value_range))
+    end,
+    [0x060C] = function(value_range, tlv_tree)
+        if value_range:len() == 0 then
+            add_text(tlv_tree, "Queryable GET form with zero-length payload")
+            return
+        end
+        if value_range:len() < 1 or value_range:len() > 32 then
+            add_text(tlv_tree, string.format("Unexpected scope length: %u", value_range:len()))
+            return
+        end
+
+        add_text(tlv_tree, "Scope: " .. range_string(value_range))
     end,
     [0x0901] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
@@ -1017,7 +1057,16 @@ local tlv_decoders = {
             add_text(tlv_tree, "Queryable GET form with zero-length payload")
             return
         end
-        add_text(tlv_tree, "Endpoint Direction: " .. enum_text(value_range(0, 1):uint(), ep_direction_vals))
+        if value_range:len() ~= 1 then
+            add_text(tlv_tree, string.format("Unexpected endpoint direction length: %u", value_range:len()))
+            return
+        end
+
+        local value = value_range(0, 1):uint()
+        local direction = band(value, 0x03)
+        add_text(tlv_tree, "Endpoint Direction: " .. enum_text(direction, ep_direction_vals))
+        add_bool_line(tlv_tree, "RDM Enabled", bit_state(value, 0x04))
+        add_text(tlv_tree, string.format("Reserved bits (3-7): 0x%02X", band(value, 0xF8)))
     end,
     [0x0906] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
@@ -1223,7 +1272,8 @@ function sig_net.dissector(tvb, pinfo, tree)
     end
 
     local uri_version = parsed.uri_segments[2] or ""
-    local uri_resource = (#parsed.uri_segments >= 3) and table.concat(parsed.uri_segments, "/", 3) or ""
+    local uri_scope = parsed.uri_segments[3] or ""
+    local uri_resource = (#parsed.uri_segments >= 4) and table.concat(parsed.uri_segments, "/", 4) or ""
 
     local security_mode_range = option_value(parsed, 2076)
     local sender_id_range = option_value(parsed, 2108)
@@ -1252,6 +1302,7 @@ function sig_net.dissector(tvb, pinfo, tree)
     sig_tree:add(fields.coap_message_id, coap_tvb(2, 2))
     sig_tree:add(fields.uri, parsed.uri)
     sig_tree:add(fields.uri_version, uri_version)
+    sig_tree:add(fields.uri_scope, uri_scope)
     sig_tree:add(fields.uri_resource, uri_resource)
 
     if security_mode_range and security_mode_range:len() >= 1 then
