@@ -44,20 +44,20 @@ These are different on purpose. The display filter is derived from the Lua proto
 ## Versioning
 
 - Plugin versioning uses semantic versioning (MAJOR.MINOR.PATCH).
-- Protocol version is tracked separately as Sig-Net v0.16.
+- Protocol version is tracked separately as Sig-Net v1.04 and SNOW v0.7.
 
 ## Version History
 
-- 1.2.0 (2026-04-11)
-	- Updated dissector target to Sig-Net v0.16.
-	- Updated URI parsing for scoped routing format: `/sig-net/<version>/<scope>/...`.
-	- Added Sig-Net URI Scope field output in the decode tree.
-	- Added support for `TID_RT_SCOPE` (0x060C).
-	- Updated `TID_RDM_TOD_DATA` (0x0304) decode to v0.16 format with `Packet_Index`, `Total_Packets`, and UID array payload.
-	- Updated `TID_RT_MODEL_NAME` (0x060B) decode for v0.16 payload format (model string only).
-	- Updated `TID_EP_DIRECTION` (0x0905) enum handling to include Fallback mode and explicit RDM enable bit decoding.
-	- Updated `TID_EP_FAILOVER` (0x0908) enum handling to include "Stop generating DMX" mode (0x04).
-	- Plugin version bumped to `1.2.0`.
+- 1.2.0 (2026-06-13)
+	- Refactored to align with Sig-Net v1.04 and SNOW v0.7.
+	- Changed dissector protocol abbreviation to `signet` and converted all ProtoField filter IDs to lowercase for reliable "Apply as Column" behavior.
+	- Added explicit protocol column setter and preserved field-backed tree population for all key decode paths.
+	- Updated Sig-Net security mode enums: added `0x01` Open Mode and changed `0xFF` label to Offboarded Device Beacon.
+	- Added and updated Sig-Net TIDs and decoders including `TID_UNIVERSE` (0x0203), `TID_OSC` (0x0204), `TID_RDM_EP_CONFIG` (0x0305), `TID_RT_OFFBOARD` (0x0401), `TID_RT_OTW_CAPABILITY` (0x060D), `TID_EP_PROTOCOL` (0x090B), and `TID_EP_IDENTIFY` (0x090C).
+	- Updated bitfield/value decoders for `TID_RT_IDENTIFY`, `TID_RT_STATUS`, `TID_RT_ROLE_CAPABILITY` (now 4-byte), `TID_EP_CAPABILITY` (now 4-byte), `TID_EP_DIRECTION`, `TID_EP_STATUS`, and `TID_EP_FAILOVER`.
+	- Expanded `TID_DG_SECURITY_EVENT` event code enum coverage (0x0005, 0x0006, 0x0007).
+	- Added SNOW TOTW namespace decode support for `0x7001` through `0x700C`.
+	- Added payload fallback handling to decode Sig-Net/SNOW TLVs from UDP/TCP/data payloads when CoAP URI metadata is unavailable, preserving compatibility with stream-layer transport paths.
 
 - 1.1.0 (2026-04-06)
 	- Updated dissector target to Sig-Net v0.15.

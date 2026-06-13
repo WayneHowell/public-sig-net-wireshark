@@ -24,15 +24,15 @@
 --
 --==============================================================================
 -- Author:       Wayne Howell
--- Date:         April 11, 2026
--- Prot Version: v0.16
+-- Date:         June 13, 2026
+-- Prot Version: Sig-Net v1.04 / SNOW v0.7
 -- Description:  Wireshark post-dissector for Sig-Net carried over CoAP.
 --               Reparses URI-Path and Sig-Net custom options in the private
 --               use range (2048-64999), decodes TLV payloads, and forwards
 --               embedded RDM TLVs to Wireshark's built-in RDM dissector. 
 --==============================================================================
 
-local sig_net = Proto("SigNet", "Sig-Net")
+local sig_net = Proto("signet", "Sig-Net")
 
 if set_plugin_info then
     set_plugin_info({
@@ -58,6 +58,8 @@ end
 
 local coap_uri_path_field = Field.new("coap.opt.uri_path")
 local udp_payload_field = Field.new("udp.payload")
+local tcp_payload_field = Field.new("tcp.payload")
+local data_data_field = Field.new("data.data")
 
 local coap_type_vals = {
     [0] = "Confirmable",
@@ -68,7 +70,8 @@ local coap_type_vals = {
 
 local security_mode_vals = {
     [0x00] = "Plaintext payload with HMAC-SHA256",
-    [0xFF] = "Unprovisioned beacon"
+    [0x01] = "Open Mode (Unauthenticated)",
+    [0xFF] = "Offboarded Device Beacon"
 }
 
 local query_level_vals = {
@@ -90,9 +93,11 @@ local rdm_tod_control_vals = {
     [0x01] = "Flush ToD and force full discovery"
 }
 
-local rdm_tod_background_vals = {
-    [0x00] = "Disable background RDM discovery",
-    [0x01] = "Enable background RDM discovery"
+local rdm_ep_config_vals = {
+    [0x00] = "No background services enabled",
+    [0x01] = "Enable Background Discovery",
+    [0x02] = "Enable Background Queue Polling",
+    [0x03] = "Enable Discovery + Queue Polling"
 }
 
 local ipv4_mode_vals = {
@@ -115,7 +120,30 @@ local identify_vals = {
     [0x00] = "Off",
     [0x01] = "Identify Subtle",
     [0x02] = "Identify Full",
-    [0x03] = "Mute indicators/backlights"
+    [0x03] = "Mute indicators",
+    [0x04] = "Un-mute indicators"
+}
+
+local ep_identify_vals = {
+    [0x00] = "Off",
+    [0x01] = "Identify Subtle",
+    [0x02] = "Identify Full"
+}
+
+local universe_command_vals = {
+    [0x01] = "Join",
+    [0x02] = "Leave"
+}
+
+local ep_protocol_vals = {
+    [0x00] = "Sig-Net",
+    [0x01] = "Art-Net 4",
+    [0x02] = "sACN"
+}
+
+local otw_sig_type_vals = {
+    [0x00] = "HMAC-SHA256",
+    [0x01] = "Asymmetric ECDSA"
 }
 
 local reboot_type_vals = {
@@ -140,7 +168,10 @@ local security_event_vals = {
     [0x0001] = "HMAC Verification Failure",
     [0x0002] = "Replay Attack Detected",
     [0x0003] = "DoS Rate-Limiting Activated",
-    [0x0004] = "Unauthorised Provisioning Attempt"
+    [0x0004] = "Unauthorised Provisioning Attempt",
+    [0x0005] = "Sender Table Saturated",
+    [0x0006] = "Cryptographic Epoch Regression",
+    [0x0007] = "Sequence Contiguity Violation"
 }
 
 local ep_failover_mode_vals = {
@@ -178,13 +209,15 @@ local tid_names = {
     [0x0102] = "TID_PRIORITY",
     [0x0201] = "TID_SYNC",
     [0x0202] = "TID_TIMECODE",
+    [0x0203] = "TID_UNIVERSE",
+    [0x0204] = "TID_OSC",
     [0x0301] = "TID_RDM_COMMAND",
     [0x0302] = "TID_RDM_RESPONSE",
     [0x0303] = "TID_RDM_TOD_CONTROL",
     [0x0304] = "TID_RDM_TOD_DATA",
-    [0x0305] = "TID_RDM_TOD_BACKGROUND",
+    [0x0305] = "TID_RDM_EP_CONFIG",
     [0x0306] = "TID_RDM_FLOW_CONTROL",
-    [0x0401] = "TID_RT_UNPROVISION",
+    [0x0401] = "TID_RT_OFFBOARD",
     [0x0501] = "TID_NW_MAC_ADDRESS",
     [0x0502] = "TID_NW_IPV4_MODE",
     [0x0503] = "TID_NW_IPV4_ADDRESS",
@@ -208,6 +241,7 @@ local tid_names = {
     [0x060A] = "TID_RT_REBOOT",
     [0x060B] = "TID_RT_MODEL_NAME",
     [0x060C] = "TID_RT_SCOPE",
+    [0x060D] = "TID_RT_OTW_CAPABILITY",
     [0x0901] = "TID_EP_UNIVERSE",
     [0x0902] = "TID_EP_LABEL",
     [0x0903] = "TID_EP_MULT_OVERRIDE",
@@ -218,36 +252,50 @@ local tid_names = {
     [0x0908] = "TID_EP_FAILOVER",
     [0x0909] = "TID_EP_DMX_TIMING",
     [0x090A] = "TID_EP_REFRESH_CAPABILITY",
+    [0x090B] = "TID_EP_PROTOCOL",
+    [0x090C] = "TID_EP_IDENTIFY",
+    [0x7001] = "TOTW_RT_COME_HOME",
+    [0x7002] = "TOTW_RT_PUBLIC_KEY",
+    [0x7003] = "TOTW_RT_IDENTIFY",
+    [0x7004] = "TOTW_RT_KEY_KS",
+    [0x7005] = "TOTW_RT_KEY_KC",
+    [0x7006] = "TOTW_RT_KEY_KM_GLOBAL",
+    [0x7007] = "TOTW_RT_KEY_KM_LOCAL",
+    [0x7008] = "TOTW_RT_KEY_K0",
+    [0x7009] = "TOTW_RT_POM_PUBLIC_KEY",
+    [0x700A] = "TOTW_RT_POM_WIPE",
+    [0x700B] = "TOTW_RT_OTW_REOPEN",
+    [0x700C] = "TOTW_RT_UPDATE_POM",
     [0xFF01] = "TID_DG_SECURITY_EVENT",
     [0xFF02] = "TID_DG_MESSAGE",
     [0xFF03] = "TID_DG_LEVEL_FOLDBACK"
 }
 
 local fields = {
-    coap_version = ProtoField.uint8("SigNet.coap.version", "CoAP Version", base.DEC, nil, 0xC0),
-    coap_type = ProtoField.uint8("SigNet.coap.type", "CoAP Type", base.DEC, coap_type_vals, 0x30),
-    coap_tkl = ProtoField.uint8("SigNet.coap.tkl", "Token Length", base.DEC, nil, 0x0F),
-    coap_code = ProtoField.uint8("SigNet.coap.code", "CoAP Code", base.HEX),
-    coap_message_id = ProtoField.uint16("SigNet.coap.message_id", "CoAP Message ID", base.HEX),
-    uri = ProtoField.string("SigNet.uri", "Sig-Net URI"),
-    uri_version = ProtoField.string("SigNet.uri.version", "Sig-Net Version"),
-    uri_scope = ProtoField.string("SigNet.uri.scope", "Sig-Net Scope"),
-    uri_resource = ProtoField.string("SigNet.uri.resource", "Sig-Net Resource"),
-    security_mode = ProtoField.uint8("SigNet.security_mode", "Security Mode", base.HEX, security_mode_vals),
-    sender_id = ProtoField.bytes("SigNet.sender_id", "Sender ID"),
-    sender_tuid = ProtoField.string("SigNet.sender_tuid", "Sender TUID"),
-    sender_endpoint = ProtoField.uint16("SigNet.sender_endpoint", "Sender Endpoint", base.DEC),
-    mfg_code = ProtoField.uint16("SigNet.mfg_code", "Manufacturer Code", base.HEX),
-    session_id = ProtoField.uint32("SigNet.session_id", "Session ID", base.HEX),
-    seq_num = ProtoField.uint32("SigNet.seq_num", "Sequence Number", base.DEC),
-    hmac = ProtoField.bytes("SigNet.hmac", "HMAC"),
-    option_number = ProtoField.uint16("SigNet.option.number", "Option Number", base.DEC, sig_net_option_names),
-    option_length = ProtoField.uint16("SigNet.option.length", "Option Length", base.DEC),
-    option_value = ProtoField.bytes("SigNet.option.value", "Option Value"),
-    payload = ProtoField.bytes("SigNet.payload", "Payload"),
-    tid = ProtoField.uint16("SigNet.tlv.tid", "TID", base.HEX, tid_names),
-    length = ProtoField.uint16("SigNet.tlv.length", "Length", base.DEC),
-    value = ProtoField.bytes("SigNet.tlv.value", "Value")
+    coap_version = ProtoField.uint8("signet.coap.version", "CoAP Version", base.DEC, nil, 0xC0),
+    coap_type = ProtoField.uint8("signet.coap.type", "CoAP Type", base.DEC, coap_type_vals, 0x30),
+    coap_tkl = ProtoField.uint8("signet.coap.tkl", "Token Length", base.DEC, nil, 0x0F),
+    coap_code = ProtoField.uint8("signet.coap.code", "CoAP Code", base.HEX),
+    coap_message_id = ProtoField.uint16("signet.coap.message_id", "CoAP Message ID", base.HEX),
+    uri = ProtoField.string("signet.uri", "Sig-Net URI"),
+    uri_version = ProtoField.string("signet.uri.version", "Sig-Net Version"),
+    uri_scope = ProtoField.string("signet.uri.scope", "Sig-Net Scope"),
+    uri_resource = ProtoField.string("signet.uri.resource", "Sig-Net Resource"),
+    security_mode = ProtoField.uint8("signet.security_mode", "Security Mode", base.HEX, security_mode_vals),
+    sender_id = ProtoField.bytes("signet.sender_id", "Sender ID"),
+    sender_tuid = ProtoField.string("signet.sender_tuid", "Sender TUID"),
+    sender_endpoint = ProtoField.uint16("signet.sender_endpoint", "Sender Endpoint", base.DEC),
+    mfg_code = ProtoField.uint16("signet.mfg_code", "Manufacturer Code", base.HEX),
+    session_id = ProtoField.uint32("signet.session_id", "Session ID", base.HEX),
+    seq_num = ProtoField.uint32("signet.seq_num", "Sequence Number", base.DEC),
+    hmac = ProtoField.bytes("signet.hmac", "HMAC"),
+    option_number = ProtoField.uint16("signet.option.number", "Option Number", base.DEC, sig_net_option_names),
+    option_length = ProtoField.uint16("signet.option.length", "Option Length", base.DEC),
+    option_value = ProtoField.bytes("signet.option.value", "Option Value"),
+    payload = ProtoField.bytes("signet.payload", "Payload"),
+    tid = ProtoField.uint16("signet.tlv.tid", "TID", base.HEX, tid_names),
+    length = ProtoField.uint16("signet.tlv.length", "Length", base.DEC),
+    value = ProtoField.bytes("signet.tlv.value", "Value")
 }
 
 sig_net.fields = fields
@@ -679,35 +727,39 @@ local function decode_rt_status(value_range, tlv_tree)
     add_bool_line(tlv_tree, "Hardware Fault", bit_state(value, 0x00000001))
     add_bool_line(tlv_tree, "Booted from Factory Defaults", bit_state(value, 0x00000002))
     add_bool_line(tlv_tree, "Configuration Locked via Local UI", bit_state(value, 0x00000004))
+    add_bool_line(tlv_tree, "Operating in Open Mode (Unauthenticated)", bit_state(value, 0x00000008))
 end
 
 local function decode_role_capability(value_range, tlv_tree)
-    if value_range:len() ~= 1 then
+    if value_range:len() ~= 4 then
         add_text(tlv_tree, string.format("Unexpected role capability length: %u", value_range:len()))
         return
     end
 
-    local value = value_range(0, 1):uint()
-    add_text(tlv_tree, string.format("Role Capability Bitfield: 0x%02X", value))
+    local value = value_range:uint()
+    add_text(tlv_tree, string.format("Role Capability Bitfield: 0x%08X", value))
     add_bool_line(tlv_tree, "Node Role Supported", bit_state(value, 0x01))
     add_bool_line(tlv_tree, "Sender Role Supported", bit_state(value, 0x02))
     add_bool_line(tlv_tree, "Manager Role Supported", bit_state(value, 0x04))
+    add_bool_line(tlv_tree, "Visualiser Role Supported", bit_state(value, 0x08))
+    add_bool_line(tlv_tree, "Root_Firmware_Support", bit_state(value, 0x40))
+    add_bool_line(tlv_tree, "Open Mode Supported", bit_state(value, 0x80))
 end
 
 local function decode_endpoint_capability(value_range, tlv_tree)
-    if value_range:len() ~= 1 then
+    if value_range:len() ~= 4 then
         add_text(tlv_tree, string.format("Unexpected endpoint capability length: %u", value_range:len()))
         return
     end
 
-    local value = value_range(0, 1):uint()
-    add_text(tlv_tree, string.format("Endpoint Capability Bitfield: 0x%02X", value))
+    local value = value_range:uint()
+    add_text(tlv_tree, string.format("Endpoint Capability Bitfield: 0x%08X", value))
     add_bool_line(tlv_tree, "Can Consume TID_LEVEL", bit_state(value, 0x01))
     add_bool_line(tlv_tree, "Can Supply TID_LEVEL", bit_state(value, 0x02))
     add_bool_line(tlv_tree, "Can Consume RDM", bit_state(value, 0x04))
     add_bool_line(tlv_tree, "Can Supply RDM", bit_state(value, 0x08))
     add_bool_line(tlv_tree, "Virtual Endpoint", bit_state(value, 0x10))
-    add_text(tlv_tree, string.format("Reserved bits (5-7): 0x%02X", band(value, 0xE0)))
+    add_text(tlv_tree, string.format("Reserved bits: 0x%08X", band(value, 0xFFFFFFE0)))
 end
 
 local function decode_endpoint_status(value_range, tlv_tree)
@@ -721,6 +773,70 @@ local function decode_endpoint_status(value_range, tlv_tree)
     add_bool_line(tlv_tree, "Data Activity", bit_state(value, 0x00000001))
     add_bool_line(tlv_tree, "Hardware Fault", bit_state(value, 0x00000002))
     add_bool_line(tlv_tree, "Configuration Locked via Local UI", bit_state(value, 0x00000004))
+    add_bool_line(tlv_tree, "Receiving TID_LEVEL", bit_state(value, 0x00000008))
+    add_bool_line(tlv_tree, "Receiving Multiple TID_LEVEL Streams", bit_state(value, 0x00000010))
+    add_bool_line(tlv_tree, "In Fallback Mode", bit_state(value, 0x00000020))
+    add_bool_line(tlv_tree, "In Failover Mode", bit_state(value, 0x00000040))
+end
+
+local function decode_universe(value_range, tlv_tree)
+    if value_range:len() ~= 7 then
+        add_text(tlv_tree, string.format("Unexpected TID_UNIVERSE length: %u", value_range:len()))
+        return
+    end
+
+    add_text(tlv_tree, string.format("Universe: %u", value_range(0, 2):uint()))
+    add_text(tlv_tree, "Command: " .. enum_text(value_range(2, 1):uint(), universe_command_vals))
+    add_text(tlv_tree, "Multicast IPv4 Address: " .. bytes_to_ipv4(value_range(3, 4)))
+end
+
+local function decode_otw_capability(value_range, tlv_tree)
+    if value_range:len() ~= 3 then
+        add_text(tlv_tree, string.format("Unexpected OTW capability length: %u", value_range:len()))
+        return
+    end
+
+    local protos = value_range(2, 1):uint()
+    add_text(tlv_tree, string.format("OTW Listener Port: %u", value_range(0, 2):uint()))
+    add_text(tlv_tree, string.format("Supported Protocols Bitfield: 0x%02X", protos))
+    add_bool_line(tlv_tree, "DTLS 1.2", bit_state(protos, 0x01))
+    add_bool_line(tlv_tree, "DTLS 1.3", bit_state(protos, 0x02))
+    add_bool_line(tlv_tree, "TLS 1.2", bit_state(protos, 0x04))
+    add_bool_line(tlv_tree, "TLS 1.3", bit_state(protos, 0x08))
+end
+
+local function decode_totw_come_home(value_range, tlv_tree)
+    if value_range:len() ~= 18 then
+        add_text(tlv_tree, string.format("Unexpected TOTW_RT_COME_HOME length: %u", value_range:len()))
+        return
+    end
+
+    add_text(tlv_tree, "Target TUID: " .. format_tuid(value_range(0, 6)))
+    add_text(tlv_tree, "New IPv4 Address: " .. bytes_to_ipv4(value_range(6, 4)))
+    add_text(tlv_tree, "New IPv4 Netmask: " .. bytes_to_ipv4(value_range(10, 4)))
+    add_text(tlv_tree, "New IPv4 Gateway: " .. bytes_to_ipv4(value_range(14, 4)))
+end
+
+local function decode_totw_otw_reopen(value_range, tlv_tree)
+    if value_range:len() < 16 then
+        add_text(tlv_tree, string.format("Unexpected TOTW_RT_OTW_REOPEN length: %u", value_range:len()))
+        return
+    end
+
+    local sig_type = value_range(6, 1):uint()
+    local sig_len = value_range:len() - 16
+
+    add_text(tlv_tree, "Target TUID: " .. format_tuid(value_range(0, 6)))
+    add_text(tlv_tree, "Signature Type: " .. enum_text(sig_type, otw_sig_type_vals))
+    add_text(tlv_tree, string.format("Timeout: %u", value_range(7, 1):uint()))
+    add_text(tlv_tree, string.format("Nonce: 0x%s", range_hex(value_range(8, 8))))
+    add_text(tlv_tree, string.format("Signature Block Length: %u", sig_len))
+
+    if sig_type == 0x00 and sig_len ~= 32 then
+        add_text(tlv_tree, "Warning: HMAC-SHA256 signature should be 32 bytes")
+    elseif sig_type == 0x01 and sig_len ~= 64 then
+        add_text(tlv_tree, "Warning: ECDSA raw signature should be 64 bytes")
+    end
 end
 
 local function decode_security_event(value_range, tlv_tree)
@@ -768,6 +884,10 @@ local tlv_decoders = {
         end
     end,
     [0x0202] = decode_timecode,
+    [0x0203] = decode_universe,
+    [0x0204] = function(value_range, tlv_tree)
+        add_text(tlv_tree, "OSC Payload: " .. range_string(value_range))
+    end,
     [0x0301] = function(value_range, tlv_tree, ctx)
         add_text(tlv_tree, string.format("RDM Command Length: %u", value_range:len()))
         call_rdm_dissector(value_range, ctx.pinfo, tlv_tree, true)
@@ -790,10 +910,13 @@ local tlv_decoders = {
             return
         end
         if value_range:len() ~= 1 then
-            add_text(tlv_tree, string.format("Unexpected TOD background length: %u", value_range:len()))
+            add_text(tlv_tree, string.format("Unexpected RDM EP config length: %u", value_range:len()))
             return
         end
-        add_text(tlv_tree, "Background TOD: " .. enum_text(value_range(0, 1):uint(), rdm_tod_background_vals))
+        local value = value_range(0, 1):uint()
+        add_text(tlv_tree, "RDM Endpoint Config: " .. enum_text(value, rdm_ep_config_vals))
+        add_bool_line(tlv_tree, "Enable Background Discovery", bit_state(value, 0x01))
+        add_bool_line(tlv_tree, "Enable Background Queue Polling", bit_state(value, 0x02))
     end,
     [0x0306] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
@@ -809,7 +932,7 @@ local tlv_decoders = {
     end,
     [0x0401] = function(value_range, tlv_tree)
         if value_range:len() ~= 4 then
-            add_text(tlv_tree, string.format("Unexpected unprovision length: %u", value_range:len()))
+            add_text(tlv_tree, string.format("Unexpected offboard length: %u", value_range:len()))
             return
         end
         add_text(tlv_tree, "Magic Word: " .. range_string(value_range))
@@ -1020,6 +1143,13 @@ local tlv_decoders = {
 
         add_text(tlv_tree, "Scope: " .. range_string(value_range))
     end,
+    [0x060D] = function(value_range, tlv_tree)
+        if value_range:len() == 0 then
+            add_text(tlv_tree, "Queryable GET form with zero-length payload")
+            return
+        end
+        decode_otw_capability(value_range, tlv_tree)
+    end,
     [0x0901] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
             add_text(tlv_tree, "Queryable GET form with zero-length payload")
@@ -1131,6 +1261,70 @@ local tlv_decoders = {
             add_text(tlv_tree, "Warning: Value is in reserved range (251-255)")
         end
     end,
+    [0x090B] = function(value_range, tlv_tree)
+        if value_range:len() == 0 then
+            add_text(tlv_tree, "Queryable GET form with zero-length payload")
+            return
+        end
+        if value_range:len() ~= 1 then
+            add_text(tlv_tree, string.format("Unexpected endpoint protocol length: %u", value_range:len()))
+            return
+        end
+        add_text(tlv_tree, "Endpoint Protocol: " .. enum_text(value_range(0, 1):uint(), ep_protocol_vals))
+    end,
+    [0x090C] = function(value_range, tlv_tree)
+        if value_range:len() == 0 then
+            add_text(tlv_tree, "Queryable GET form with zero-length payload")
+            return
+        end
+        if value_range:len() ~= 1 then
+            add_text(tlv_tree, string.format("Unexpected endpoint identify length: %u", value_range:len()))
+            return
+        end
+        add_text(tlv_tree, "Endpoint Identify: " .. enum_text(value_range(0, 1):uint(), ep_identify_vals))
+    end,
+    [0x7001] = decode_totw_come_home,
+    [0x7002] = function(value_range, tlv_tree)
+        add_text(tlv_tree, string.format("DER Public Key (%u bytes)", value_range:len()))
+    end,
+    [0x7003] = function(value_range, tlv_tree)
+        if value_range:len() ~= 32 then
+            add_text(tlv_tree, string.format("Unexpected TLS Session Fingerprint length: %u", value_range:len()))
+            return
+        end
+        add_text(tlv_tree, "TLS Session Fingerprint: 0x" .. range_hex(value_range))
+    end,
+    [0x7004] = function(value_range, tlv_tree)
+        add_text(tlv_tree, string.format("Ks Key (%u bytes)", value_range:len()))
+    end,
+    [0x7005] = function(value_range, tlv_tree)
+        add_text(tlv_tree, string.format("Kc Key (%u bytes)", value_range:len()))
+    end,
+    [0x7006] = function(value_range, tlv_tree)
+        add_text(tlv_tree, string.format("Km_global Key (%u bytes)", value_range:len()))
+    end,
+    [0x7007] = function(value_range, tlv_tree)
+        add_text(tlv_tree, string.format("Km_local Key (%u bytes)", value_range:len()))
+    end,
+    [0x7008] = function(value_range, tlv_tree)
+        add_text(tlv_tree, string.format("K0 Key (%u bytes)", value_range:len()))
+    end,
+    [0x7009] = function(value_range, tlv_tree)
+        add_text(tlv_tree, string.format("POM Public Key (%u bytes)", value_range:len()))
+    end,
+    [0x700A] = function(value_range, tlv_tree)
+        if value_range:len() ~= 78 then
+            add_text(tlv_tree, string.format("Unexpected TOTW_RT_POM_WIPE length: %u", value_range:len()))
+            return
+        end
+        add_text(tlv_tree, "Target TUID: " .. format_tuid(value_range(0, 6)))
+        add_text(tlv_tree, "Nonce: 0x" .. range_hex(value_range(6, 8)))
+        add_text(tlv_tree, "Signature (64 bytes): 0x" .. range_hex(value_range(14, 64)))
+    end,
+    [0x700B] = decode_totw_otw_reopen,
+    [0x700C] = function(value_range, tlv_tree)
+        add_text(tlv_tree, string.format("Updated POM Public Key (%u bytes)", value_range:len()))
+    end,
     [0xFF01] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
             add_text(tlv_tree, "Queryable GET form with zero-length payload")
@@ -1221,8 +1415,7 @@ local function has_sig_net_uri()
     return false
 end
 
-local function get_coap_payload_range()
-    local field_info = udp_payload_field()
+local function normalize_field_to_range(field_info)
     if not field_info then
         return nil
     end
@@ -1241,22 +1434,59 @@ local function get_coap_payload_range()
     return nil
 end
 
-function sig_net.dissector(tvb, pinfo, tree)
-    if not has_sig_net_uri() then
-        return
+local function get_payload_range()
+    local candidates = { udp_payload_field(), tcp_payload_field(), data_data_field() }
+    for _, field_info in ipairs(candidates) do
+        local range = normalize_field_to_range(field_info)
+        if range then
+            return range
+        end
+    end
+    return nil
+end
+
+local function looks_like_raw_tlv_payload(payload_range)
+    if not payload_range or payload_range:len() < 4 then
+        return false
     end
 
-    local coap_tvb = get_coap_payload_range()
+    local tid = payload_range(0, 2):uint()
+    local len = payload_range(2, 2):uint()
+    if 4 + len > payload_range:len() then
+        return false
+    end
+
+    return (tid >= 0x7000 and tid <= 0x70FF) or tid_names[tid] ~= nil
+end
+
+local function decode_raw_tlv_fallback(payload_range, pinfo, tree)
+    if not looks_like_raw_tlv_payload(payload_range) then
+        return false
+    end
+
+    pinfo.cols.protocol = "SIG-NET"
+    local sig_tree = tree:add(sig_net, payload_range, "Sig-Net / SNOW Raw TLV Payload")
+    local ctx = {
+        pinfo = pinfo,
+        uri = "",
+        uri_segments = {},
+        mfg_code = 0
+    }
+    decode_tlvs(payload_range, sig_tree, ctx)
+    return true
+end
+
+function sig_net.dissector(tvb, pinfo, tree)
+    local coap_tvb = get_payload_range()
     if not coap_tvb then
-        local malformed_tree = tree:add(sig_net, tvb(), "Sig-Net")
-        add_text(malformed_tree, "Could not obtain UDP payload for CoAP reparse")
         return
     end
 
     local parsed, err = parse_coap_packet(coap_tvb)
     if not parsed then
-        local malformed_tree = tree:add(sig_net, coap_tvb, "Sig-Net")
-        add_text(malformed_tree, "CoAP reparse failed: " .. tostring(err))
+        if decode_raw_tlv_fallback(coap_tvb, pinfo, tree) then
+            return
+        end
         return
     end
 
@@ -1268,6 +1498,9 @@ function sig_net.dissector(tvb, pinfo, tree)
         end
     end
     if not has_sig_net then
+        if decode_raw_tlv_fallback(coap_tvb, pinfo, tree) then
+            return
+        end
         return
     end
 
@@ -1293,6 +1526,7 @@ function sig_net.dissector(tvb, pinfo, tree)
     if not info_text:find("Sig-Net " .. summary, 1, true) then
         pinfo.cols.info:append(" [Sig-Net " .. summary .. "]")
     end
+    pinfo.cols.protocol = "SIG-NET"
 
     local sig_tree = tree:add(sig_net, coap_tvb, "Sig-Net")
     sig_tree:add(fields.coap_version, coap_tvb(0, 1))
