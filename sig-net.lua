@@ -36,7 +36,7 @@ local sig_net = Proto("signet", "Sig-Net")
 
 if set_plugin_info then
     set_plugin_info({
-        version = "1.2.0",
+        version = "1.2.1",
         author = "Wayne Howell",
         description = "Sig-Net Wireshark Lua post-dissector",
         repository = "private-sig-net-wireshark"
@@ -207,6 +207,7 @@ local tid_names = {
     [0x0002] = "TID_POLL_REPLY",
     [0x0101] = "TID_LEVEL",
     [0x0102] = "TID_PRIORITY",
+    [0x0103] = "TID_PREVIEW",
     [0x0201] = "TID_SYNC",
     [0x0202] = "TID_TIMECODE",
     [0x0203] = "TID_UNIVERSE",
@@ -295,7 +296,8 @@ local fields = {
     payload = ProtoField.bytes("signet.payload", "Payload"),
     tid = ProtoField.uint16("signet.tlv.tid", "TID", base.HEX, tid_names),
     length = ProtoField.uint16("signet.tlv.length", "Length", base.DEC),
-    value = ProtoField.bytes("signet.tlv.value", "Value")
+    value = ProtoField.bytes("signet.tlv.value", "Value"),
+    tids_list = ProtoField.string("signet.tids_present", "TIDs Present")
 }
 
 sig_net.fields = fields
@@ -876,6 +878,25 @@ local tlv_decoders = {
             add_text(tlv_tree, "Unspecified slots default to 100")
         end
     end,
+    [0x0103] = function(value_range, tlv_tree)
+        if value_range:len() == 0 then
+            add_text(tlv_tree, "Queryable GET form with zero-length payload")
+            return
+        end
+        if value_range:len() ~= 1 then
+            add_text(tlv_tree, string.format("Unexpected preview length: %u", value_range:len()))
+            return
+        end
+
+        local preview = value_range(0, 1):uint()
+        if preview == 0 then
+            add_text(tlv_tree, "Preview: Off")
+        elseif preview == 1 then
+            add_text(tlv_tree, "Preview: On")
+        else
+            add_text(tlv_tree, string.format("Preview: Reserved value 0x%02X", preview))
+        end
+    end,
     [0x0201] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
             add_text(tlv_tree, "SYNC trigger with no payload")
@@ -1344,7 +1365,7 @@ local tlv_decoders = {
     end
 }
 
-local function decode_tlvs(payload_range, sig_tree, ctx)
+local function decode_tlvs(payload_range, sig_tree, ctx, coap_tvb, payload_abs_start)
     if not payload_range or payload_range:len() == 0 then
         add_text(sig_tree, "No application payload")
         return
@@ -1353,29 +1374,49 @@ local function decode_tlvs(payload_range, sig_tree, ctx)
     sig_tree:add(fields.payload, payload_range)
 
     local tlv_root = sig_tree:add(sig_net, payload_range, string.format("TLVs (%u bytes)", payload_range:len()))
+    local tids_present = {}
+    local tids_seen = {}
+
+    local function add_tids_summary()
+        if not coap_tvb or payload_abs_start == nil then
+            return
+        end
+
+        local tids_str = (#tids_present > 0) and table.concat(tids_present, ", ") or "None"
+        sig_tree:add(fields.tids_list, coap_tvb(payload_abs_start, payload_range:len()), tids_str)
+    end
+
     local offset = 0
     local index = 1
 
     while offset < payload_range:len() do
         if payload_range:len() - offset < 4 then
             add_text(tlv_root, string.format("Trailing %u byte(s) do not form a complete TLV header", payload_range:len() - offset))
+            add_tids_summary()
             return
         end
 
-        local tid_range = payload_range(offset, 2)
-        local length_range = payload_range(offset + 2, 2)
+        local abs_offset = payload_abs_start + offset
+        local tid_range = coap_tvb(abs_offset, 2)
+        local length_range = coap_tvb(abs_offset + 2, 2)
         local tid = tid_range:uint()
         local length = length_range:uint()
         local total = 4 + length
 
         if offset + total > payload_range:len() then
             add_text(tlv_root, string.format("Malformed TLV at index %u: length %u exceeds remaining payload", index, length))
+            add_tids_summary()
             return
         end
 
-        local full_range = payload_range(offset, total)
-        local value_range = (length > 0) and payload_range(offset + 4, length) or tid_range(0, 0)
+        local full_range = coap_tvb(abs_offset, total)
+        local value_range = (length > 0) and coap_tvb(abs_offset + 4, length) or tid_range(0, 0)
         local name = tid_names[tid] or ((tid >= 0x8000) and "Manufacturer-Specific TID" or "Unknown TID")
+        if not tids_seen[name] then
+            tids_seen[name] = true
+            tids_present[#tids_present + 1] = name
+        end
+
         local tlv_tree = tlv_root:add(sig_net, full_range, string.format("%u: %s (0x%04X), Length %u", index, name, tid, length))
         tlv_tree:add(fields.tid, tid_range)
         tlv_tree:add(fields.length, length_range)
@@ -1397,6 +1438,8 @@ local function decode_tlvs(payload_range, sig_tree, ctx)
         offset = offset + total
         index = index + 1
     end
+
+    add_tids_summary()
 end
 
 local function has_sig_net_uri()
@@ -1472,7 +1515,7 @@ local function decode_raw_tlv_fallback(payload_range, pinfo, tree)
         uri_segments = {},
         mfg_code = 0
     }
-    decode_tlvs(payload_range, sig_tree, ctx)
+    decode_tlvs(payload_range, sig_tree, ctx, payload_range, 0)
     return true
 end
 
@@ -1597,7 +1640,7 @@ function sig_net.dissector(tvb, pinfo, tree)
         mfg_code = mfg_code_value
     }
 
-    decode_tlvs(parsed.payload, sig_tree, ctx)
+    decode_tlvs(parsed.payload, sig_tree, ctx, coap_tvb, parsed.offset_after_options)
 end
 
 register_postdissector(sig_net)

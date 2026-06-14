@@ -48,6 +48,11 @@ These are different on purpose. The display filter is derived from the Lua proto
 
 ## Version History
 
+- 1.2.1 (2026-06-14)
+	- Fixed TLV field-to-frame mapping for Wireshark column usage by adding `signet.tlv.tid`, `signet.tlv.length`, and `signet.tlv.value` using absolute offsets from the top-level packet buffer.
+	- Added packet-level summary field `signet.tids_present` (`TIDs Present`) with a comma-separated list of decoded TIDs to support reliable "Apply as Column" for multi-TLV packets.
+	- Added `TID_PREVIEW` (0x0103) name and decoder coverage for Sig-Net v1.04 completeness.
+
 - 1.2.0 (2026-06-13)
 	- Refactored to align with Sig-Net v1.04 and SNOW v0.7.
 	- Changed dissector protocol abbreviation to `signet` and converted all ProtoField filter IDs to lowercase for reliable "Apply as Column" behavior.
