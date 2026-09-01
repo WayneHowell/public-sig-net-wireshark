@@ -205,6 +205,7 @@ local sig_net_option_names = {
 local tid_names = {
     [0x0001] = "TID_POLL",
     [0x0002] = "TID_POLL_REPLY",
+    [0x0003] = "TID_SET_REPLY",
     [0x0101] = "TID_LEVEL",
     [0x0102] = "TID_PRIORITY",
     [0x0103] = "TID_PREVIEW",
@@ -867,6 +868,14 @@ end
 local tlv_decoders = {
     [0x0001] = decode_poll,
     [0x0002] = decode_poll_reply,
+    [0x0003] = function(value_range, tlv_tree)
+        if value_range:len() ~= 3 then
+            add_text(tlv_tree, string.format("Unexpected set reply length: %u", value_range:len()))
+            return
+        end
+        add_text(tlv_tree, string.format("Flags Bitfield: 0x%02X", value_range(0, 1):uint()))
+        add_text(tlv_tree, "Change count: " .. value_range(1, 2):uint())
+    end,
     [0x0101] = function(value_range, tlv_tree)
         add_level_summary(tlv_tree, value_range, "Level")
     end,
