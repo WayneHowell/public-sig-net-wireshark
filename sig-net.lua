@@ -193,6 +193,10 @@ local dmx_timing_vals = {
     [0x02] = "Minimum timing"
 }
 
+local text_encoding_vals = {
+    [0x00] = "UTF-8/ASCII"
+}
+
 local sig_net_option_names = {
     [2076] = "Sig-Net-Security-Mode",
     [2108] = "Sig-Net-Sender-ID",
@@ -1088,7 +1092,15 @@ local tlv_decoders = {
             add_text(tlv_tree, "Queryable GET form with zero-length payload")
             return
         end
-        add_text(tlv_tree, "Device Label: " .. range_string(value_range))
+        if value_range:len() < 1 or value_range:len() > 64 then
+            add_text(tlv_tree, string.format("Unexpected device label length: %u", value_range:len()))
+            return
+        end
+        local encoding = value_range(0, 1):uint()
+        add_text(tlv_tree, "Encoding: " .. enum_text(encoding, text_encoding_vals))
+        if (encoding == 0x00) then
+            add_text(tlv_tree, "Device Label: " .. range_string(value_range(1, value_range:len() - 1)))
+        end
     end,
     [0x0606] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
@@ -1149,8 +1161,11 @@ local tlv_decoders = {
             add_text(tlv_tree, string.format("Unexpected model name length: %u", value_range:len()))
             return
         end
-
-        add_text(tlv_tree, "Model Name: " .. range_string(value_range))
+        local encoding = value_range(0, 1):uint()
+        add_text(tlv_tree, "Encoding: " .. enum_text(encoding, text_encoding_vals))
+        if (encoding == 0x00) then
+            add_text(tlv_tree, "Model Name: " .. range_string(value_range(1, value_range:len() - 1)))
+        end
     end,
     [0x060C] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
@@ -1187,7 +1202,15 @@ local tlv_decoders = {
             add_text(tlv_tree, "Queryable GET form with zero-length payload")
             return
         end
-        add_text(tlv_tree, "Endpoint Label: " .. range_string(value_range))
+        if value_range:len() < 1 or value_range:len() > 64 then
+            add_text(tlv_tree, string.format("Unexpected endpoint label length: %u", value_range:len()))
+            return
+        end
+        local encoding = value_range(0, 1):uint()
+        add_text(tlv_tree, "Encoding: " .. enum_text(encoding, text_encoding_vals))
+        if (encoding == 0x00) then
+            add_text(tlv_tree, "Endpoint Label: " .. range_string(value_range(1, value_range:len() - 1)))
+        end
     end,
     [0x0903] = function(value_range, tlv_tree)
         if value_range:len() == 0 then
