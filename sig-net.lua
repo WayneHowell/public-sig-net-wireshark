@@ -782,7 +782,7 @@ local function decode_endpoint_status(value_range, tlv_tree)
 end
 
 local function decode_universe(value_range, tlv_tree)
-    if value_range:len() ~= 7 then
+    if value_range:len() ~= 9 then
         add_text(tlv_tree, string.format("Unexpected TID_UNIVERSE length: %u", value_range:len()))
         return
     end
@@ -790,6 +790,7 @@ local function decode_universe(value_range, tlv_tree)
     add_text(tlv_tree, string.format("Universe: %u", value_range(0, 2):uint()))
     add_text(tlv_tree, "Command: " .. enum_text(value_range(2, 1):uint(), universe_command_vals))
     add_text(tlv_tree, "Multicast IPv4 Address: " .. bytes_to_ipv4(value_range(3, 4)))
+    add_text(tlv_tree, "Originating Sender Endpoint: " .. value_range(7, 2):uint())
 end
 
 local function decode_otw_capability(value_range, tlv_tree)
