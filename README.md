@@ -18,6 +18,8 @@ This repository contains a Wireshark Lua post-dissector for Sig-Net.
 - Reparses the CoAP packet to extract Sig-Net custom options defined in Section 8.
 - Decodes Sig-Net TLVs with detailed field-level output.
 - Attempts to hand `TID_RDM_COMMAND` and `TID_RDM_RESPONSE` payloads to Wireshark's built-in RDM dissector.
+- Decodes the URI lane (discovery, reply, command, aux, beacon, level, etc.), target TUID/endpoint/universe and the expected HMAC key.
+- Validates TLV lengths against the Sig-Net Appendix C dictionary and raises Wireshark Expert Info for malformed data, specification violations and legacy (earlier revision) encodings.
 - Does not verify or calculate the HMAC.
 
 ## Install
@@ -44,9 +46,25 @@ These are different on purpose. The display filter is derived from the Lua proto
 ## Versioning
 
 - Plugin versioning uses semantic versioning (MAJOR.MINOR.PATCH).
-- Protocol version is tracked separately as Sig-Net v1.04 and SNOW v0.7.
+- Protocol version is tracked separately as Sig-Net v1.11 and SNOW v1.0.
 
 ## Version History
+
+- 1.3.0 (2026-09-26)
+	- Refreshed against Sig-Net v1.11 and SNOW v1.0.
+	- Added `TID_SET_REPLY` (0x0003) decode with `CHANGE_COUNT`, and a check that it is the final TLV.
+	- `TID_EP_CAPABILITY` now decodes the 6-byte v1.11 payload: Bit 5 Priority Merge Mode (Per-Slot Priority Merging vs Constrained Node Fallback) and Maximum Merge Sources. Legacy 4-byte payloads are accepted, flagged as legacy, and Maximum Merge Sources is shown as an assumed 4.
+	- `TID_EP_CAPABILITY`, `TID_EP_DIRECTION` and `TID_EP_STATUS` are now filterable bitfields (`signet.ep_capability.*`, `signet.ep_direction.*`, `signet.ep_status.*`). Added `signet.change_count`.
+	- `TID_UNIVERSE` updated to the 9-byte v1.07 layout (Originating Sender Endpoint); legacy 7-byte payloads are flagged. Default Multicast Folding addresses are shown.
+	- `TID_PREVIEW` now decoded as level data (1-512 bytes) per the spec.
+	- `TID_RT_DEVICE_LABEL`, `TID_RT_MODEL_NAME` and `TID_EP_LABEL` decode the leading Encoding byte.
+	- `TID_TIMECODE` adds frame rate types 0x04-0x0A and range checks.
+	- `TID_RT_OTW_CAPABILITY` adds Bit 4 (Method B, PIN Onboarding). `TID_DG_SECURITY_EVENT` adds event 0x0008 (Failed Offboard) and address-length checks.
+	- Added SNOW `TOTW_RT_SCOPE` (0x700D). Removed `TID_RT_SCOPE` (0x060C), which is not in the specification.
+	- Option 2236 renamed to Sig-Net-Auth. Options are checked for the v1.10 fixed-width opaque encoding; minimal-length uint encoding is flagged as legacy. This fixes a Lua error that dropped all TLVs when an option was zero-length.
+	- Security mode checks: Auth length per mode, Session/Sequence zero in Open and Beacon modes, Auth omitted permitted for beacons.
+	- Manufacturer TID range corrected to 0x8000-0xFF00.
+	- Added Wireshark Expert Info (`signet.legacy`, `signet.spec_violation`, `signet.malformed`) replacing plain-text warnings.
 
 - 1.2.1 (2026-06-14)
 	- Fixed TLV field-to-frame mapping for Wireshark column usage by adding `signet.tlv.tid`, `signet.tlv.length`, and `signet.tlv.value` using absolute offsets from the top-level packet buffer.
